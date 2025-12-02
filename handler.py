@@ -21,7 +21,7 @@ def download_video_to_uploads(url: str) -> str:
     """
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Détection extension si possible
+    # Détection extension
     ext = ".mp4"
     filename_raw = url.split("/")[-1]
     if "." in filename_raw:
@@ -32,7 +32,7 @@ def download_video_to_uploads(url: str) -> str:
 
     print(f"⬇️  Téléchargement vidéo depuis : {url}")
 
-    resp = requests.get(url, stream=True, timeout=60)
+    resp = requests.get(url, stream=True, timeout=120)
     resp.raise_for_status()
 
     with dest.open("wb") as f:
@@ -41,6 +41,14 @@ def download_video_to_uploads(url: str) -> str:
                 f.write(chunk)
 
     print(f"✅ Vidéo téléchargée : {dest}")
+
+    # Affichage de la taille
+    try:
+        file_size = os.path.getsize(dest)
+        print(f"📏 Taille du fichier : {file_size} octets")
+    except:
+        print("⚠️ Impossible de calculer la taille du fichier")
+
     return str(dest)
 
 
@@ -50,80 +58,53 @@ def download_video_to_uploads(url: str) -> str:
 
 def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    event = {
-      "input": {
-        "task": "ping"
-      }
-    }
-
-    ou
-
-    {
-      "input": {
-        "task": "process",
-        "video_url": "https://....mp4",
-        "num_clips": 8,
-        "min_duration": 20,
-        "max_duration": 45
-      }
-    }
+    event = { "input": {...} }
     """
     try:
-        inp = event.get("input") or {}
+        inp = event.get("input", {})
         task = inp.get("task", "ping")
 
-        # -------------------------
-        # 1️⃣ Ping de test
-        # -------------------------
+        # ---------------------------------
+        # 1️⃣ Test rapide
+        # ---------------------------------
         if task == "ping":
             return {
                 "status": "ok",
-                "message": "clipai-runpod-engine is alive ✅"
+                "message": "ClipAI RunPod Engine is alive 🚀"
             }
 
-        # -------------------------
-        # 2️⃣ Traitement vidéo
-        # -------------------------
+        # ---------------------------------
+        # 2️⃣ Traitement AI
+        # ---------------------------------
         if task == "process":
+
             video_url = inp.get("video_url")
             if not video_url:
-                return {
-                    "status": "error",
-                    "error": "Missing 'video_url' in input."
-                }
+                return {"status": "error", "error": "Missing 'video_url'."}
 
             num_clips = int(inp.get("num_clips", 8))
-            min_duration = float(inp.get("min_duration", 20.0))
-            max_duration = float(inp.get("max_duration", 45.0))
+            min_duration = float(inp.get("min_duration", 20))
+            max_duration = float(inp.get("max_duration", 45))
 
             # Téléchargement vidéo
             local_path = download_video_to_uploads(video_url)
 
-            # 👍 AJOUT : afficher la taille du fichier téléchargé
-            try:
-                file_size = os.path.getsize(local_path)
-                print(f"📏 Taille du fichier téléchargé : {file_size} octets")
-            except:
-                print("⚠️ Impossible de lire la taille du fichier")
-
-            # -------------------------
-            # Pipeline IA
-            # -------------------------
+            # Pipeline IA complet
             clips = generate_shorts(
                 input_video_path=local_path,
                 num_clips=num_clips,
                 min_duration=min_duration,
-                max_duration=max_duration,
+                max_duration=max_duration
             )
 
             return {
                 "status": "done",
-                "clips": clips,
+                "clips": clips
             }
 
-        # -------------------------
+        # ---------------------------------
         # 3️⃣ Task inconnue
-        # -------------------------
+        # ---------------------------------
         return {
             "status": "error",
             "error": f"Unknown task '{task}'"
@@ -136,9 +117,12 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": traceback.format_exc()
         }
 
 
-# Lancement du worker RunPod
+# ===============================
+#  LANCEMENT RUNPOD
+# ===============================
+
 runpod.serverless.start({"handler": handler})
