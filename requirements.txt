@@ -1,5 +1,14 @@
 runpod
-openai==1.55.3
-ffmpeg-python
+openai
+
 pysubs2
 requests
+
+# Whisper API (pas de modèle local)
+# Rien à installer
+
+# Vidéo
+ffmpeg-python
+
+# Pour charger et manipuler les chemins
+pathlib
