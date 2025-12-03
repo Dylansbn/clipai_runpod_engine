@@ -33,13 +33,16 @@ client = OpenAI(
 
 
 # ==============================
-# 0. TÉLÉCHARGEMENT ROBUSTE (YT / TikTok / Vimeo)
+# 0. TÉLÉCHARGEMENT ROBUSTE (YT, TikTok, Vimeo…)
 # ==============================
 
 def download_video(url: str) -> str:
     """
-    Télécharge une vidéo via yt-dlp (YouTube, TikTok, Vimeo, etc.)
-    et renvoie le chemin local vers un .mp4.
+    Téléchargement robuste avec yt-dlp (YouTube, TikTok, Vimeo…).
+
+    NOTE : pour YouTube, YouTube peut parfois demander des cookies / anti-bot.
+    Dans ce cas, tu peux limiter ton produit aux vidéos non protégées
+    ou privilégier l'upload direct par l'utilisateur.
     """
     print(f"⬇️ Downloading: {url}")
 
@@ -51,12 +54,8 @@ def download_video(url: str) -> str:
         "no_warnings": True,
         "geo_bypass": True,
         "noprogress": True,
-        "format": "mp4/best/bestvideo+bestaudio",
-        "user_agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
-        ),
+        "format": "mp4/best",
+        "user_agent": "Mozilla/5.0",
         "retries": 5,
     }
 
@@ -67,27 +66,10 @@ def download_video(url: str) -> str:
         raise Exception(f"yt-dlp a échoué : {e}")
 
     if not output_path.exists():
-        raise Exception("Téléchargement échoué : fichier inexistant après yt-dlp.")
+        raise Exception("Téléchargement échoué : fichier introuvable après yt-dlp.")
 
     size = output_path.stat().st_size
-    print(f"📦 Taille fichier : {size} bytes")
-
-    if size < 80_000:  # ~80 ko = probablement HTML / erreur
-        raise Exception("Fichier téléchargé trop petit (<80ko) → probablement pas une vraie vidéo.")
-
-    # Vérif ffprobe
-    probe_cmd = [
-        "ffprobe", "-v", "error",
-        "-show_format", "-show_streams",
-        str(output_path)
-    ]
-    probe = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    if probe.returncode != 0:
-        err = probe.stderr.decode("utf-8", errors="ignore")
-        raise Exception(f"ffprobe : fichier illisible ou non supporté → {err}")
-
-    print("✅ Vidéo téléchargée & validée (OK pour Whisper).")
+    print(f"✅ Download OK → {output_path} ({size} bytes)")
     return str(output_path)
 
 
@@ -96,7 +78,7 @@ def download_video(url: str) -> str:
 # ==============================
 
 def transcribe_with_whisper(video_path: str) -> Dict[str, Any]:
-    """Transcription via Whisper API."""
+    """Transcription via Whisper API (pas de modèle local)."""
     print("🎙️ Envoi → Whisper API ...")
 
     with open(video_path, "rb") as f:
@@ -121,7 +103,7 @@ def transcribe_with_whisper(video_path: str) -> Dict[str, Any]:
 
 
 # ==============================
-# 2. IA VIRALE (GPT) — sélection des meilleurs moments
+# 2. IA VIRALE PRO (GPT) — hooks, résumés, hashtags
 # ==============================
 
 def select_viral_segments(
@@ -131,6 +113,18 @@ def select_viral_segments(
     max_duration: float = 45.0,
 ) -> List[Dict[str, Any]]:
 
+    """
+    Sélectionne les meilleurs moments façon Klap/OpusClip.
+
+    Pour chaque clip, on demande à GPT :
+      - start / end
+      - title : titre court et viral
+      - reason : pourquoi ce moment est viral
+      - hook : phrase d’accroche pour début de short
+      - summary : résumé 1 phrase
+      - hashtags : liste de hashtags pertinents
+    """
+
     if not segments:
         return []
 
@@ -139,25 +133,53 @@ def select_viral_segments(
         for s in segments
     )[:15000]
 
+    total_duration = float(segments[-1]["end"])
+
+    json_schema = """
+{
+  "clips": [
+    {
+      "start": 10.0,
+      "end": 32.5,
+      "title": "Titre viral court",
+      "reason": "Pourquoi ce passage est viral.",
+      "hook": "Phrase d'accroche pour les 2-3 premières secondes.",
+      "summary": "Résumé très court du clip.",
+      "hashtags": ["#exemple", "#tiktok", "#shorts"]
+    }
+  ]
+}
+"""
+
     system_prompt = (
-        "Tu es un expert TikTok/Shorts. "
-        "Tu choisis les moments les plus viraux avec un hook fort. "
-        "Réponds STRICTEMENT en JSON : "
-        "{\"clips\": [{\"start\": x, \"end\": y, \"title\": \"\", \"reason\": \"\"}]}"
+        "Tu es un expert montage Shorts/TikTok (comme Klap.app / OpusClip). "
+        "À partir d’une transcription horodatée, tu choisis les meilleurs moments "
+        f"pour {num_clips} clips courts. Chaque clip doit avoir une durée entre "
+        f"{min_duration} et {max_duration} secondes, rester dans la vidéo (0 → {total_duration}s), "
+        "et commencer sur un hook fort (pas en plein milieu d’une phrase si possible). "
+        "Réponds STRICTEMENT en JSON valide qui respecte ce schéma :"
+        f"\n{json_schema}"
     )
 
     user_prompt = f"""
-Transcription :
+Transcription horodatée :
 
 {transcript}
 
-Choisis {num_clips} clips de {min_duration}-{max_duration} secondes.
-Réponds STRICTEMENT en JSON.
+Consignes :
+- Choisis les {num_clips} meilleurs extraits.
+- Chaque extrait doit :
+  - durer entre {min_duration} et {max_duration} secondes,
+  - être intéressant du point de vue TikTok / Reels / Shorts,
+  - commencer par une phrase qui accroche,
+  - donner envie de regarder jusqu'au bout.
+
+Ne renvoie AUCUN texte hors du JSON.
 """
 
-    print("🤖 Appel GPT...")
+    print("🤖 Appel GPT (IA virale PRO)...")
     completion = client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1-mini",  # tu peux passer en gpt-4.1 normal si tu veux encore plus quali
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -166,30 +188,63 @@ Réponds STRICTEMENT en JSON.
     )
 
     raw = completion.choices[0].message.content
-    print("🔎 JSON IA reçu :", raw[:300])
+    print("🔎 JSON IA reçu (troncature) :", raw[:400])
+
+    clips_data: List[Dict[str, Any]] = []
 
     try:
         data = json.loads(raw)
-        clips = data.get("clips", [])
-    except:
-        clips = []
+        clips_data = data.get("clips", [])
+    except Exception as e:
+        print("⚠️ Erreur parsing JSON GPT :", e)
+        clips_data = []
 
-    final = []
-    for c in clips:
+    final: List[Dict[str, Any]] = []
+
+    for c in clips_data:
         try:
             s = float(c["start"])
             e = float(c["end"])
-            if e > s:
-                final.append({
-                    "start": s,
-                    "end": e,
-                    "title": c.get("title", "Clip viral"),
-                    "reason": c.get("reason", "")
-                })
-        except:
-            pass
+            if e <= s:
+                continue
+            if (e - s) < min_duration or (e - s) > max_duration:
+                # on tolère un peu, mais on skip les extrêmes
+                continue
 
-    print(f"✅ Clips retenus : {len(final)}")
+            final.append({
+                "start": s,
+                "end": e,
+                "title": c.get("title", "Clip viral"),
+                "reason": c.get("reason", ""),
+                "hook": c.get("hook", ""),
+                "summary": c.get("summary", ""),
+                "hashtags": c.get("hashtags", []),
+            })
+        except Exception:
+            continue
+
+    # Fallback si GPT a foiré ou renvoyé trop peu de clips
+    if len(final) == 0 and total_duration > 0:
+        print("⚠️ Fallback IA virale : génération naïve des clips.")
+        approx_len = max(min_duration, (total_duration / max(num_clips, 1)))
+        t = 0.0
+        idx = 0
+        while t + min_duration < total_duration and idx < num_clips:
+            start = t
+            end = min(t + approx_len, total_duration)
+            final.append({
+                "start": start,
+                "end": end,
+                "title": f"Clip {idx+1}",
+                "reason": "Fallback automatique",
+                "hook": "",
+                "summary": "",
+                "hashtags": [],
+            })
+            t = end
+            idx += 1
+
+    print(f"✅ Clips retenus (IA virale PRO) : {len(final)}")
     return final
 
 
@@ -206,17 +261,12 @@ def _sanitize_ass_text(text: str) -> str:
 def _split_into_lines(words: List[str], max_words_per_line: int = 7):
     if len(words) <= max_words_per_line:
         return [words]
+
     mid = len(words) // 2
     return [words[:mid], words[mid:]]
 
 
 def build_karaoke_text(text: str, start: float, end: float) -> str:
-    """
-    Texte karaoké façon Klap :
-    - \k mot par mot
-    - 1–2 lignes
-    - fade in/out léger
-    """
     clean = _sanitize_ass_text(text)
     words = clean.split()
     if not words:
@@ -263,7 +313,7 @@ def generate_ass_subs_for_clip(
     style.marginl = 40
     style.marginr = 40
     style.marginv = 120
-    style.alignment = 2   # bas-centre
+    style.alignment = 2  # bas-centre
 
     subs.styles[style.name] = style
 
@@ -290,7 +340,7 @@ def generate_ass_subs_for_clip(
 
 
 # ==============================
-# 4. FFMPEG : CUT + 9:16 + SUBS
+# 4. FFMPEG : CUT + 9:16 + SUBTITLES
 # ==============================
 
 def ffmpeg_extract_and_style(src: str, out: str, subs: str, start: float, end: float):
@@ -332,16 +382,16 @@ def generate_shorts(
     if not video.exists():
         raise FileNotFoundError(video)
 
-    # 1) Transcription
+    # 1. Transcription
     tr = transcribe_with_whisper(str(video))
     segments = tr["segments"]
 
-    # 2) IA virale
+    # 2. IA virale PRO
     viral = select_viral_segments(segments, num_clips, min_duration, max_duration)
 
     results = []
 
-    # 3) Génération de chaque short
+    # 3. Génération
     for i, c in enumerate(viral, start=1):
         out_vid = SHORTS_DIR / f"short_{i:02d}.mp4"
         out_ass = SUBS_DIR / f"short_{i:02d}.ass"
@@ -353,8 +403,11 @@ def generate_shorts(
 
         results.append({
             "index": i,
-            "title": c["title"],
-            "reason": c["reason"],
+            "title": c.get("title", f"Clip {i}"),
+            "reason": c.get("reason", ""),
+            "hook": c.get("hook", ""),
+            "summary": c.get("summary", ""),
+            "hashtags": c.get("hashtags", []),
             "start": c["start"],
             "end": c["end"],
             "video_path": str(out_vid),
