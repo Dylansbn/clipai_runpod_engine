@@ -1,8 +1,10 @@
 import os
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Dict, Any
+from urllib.parse import urlparse
 
 import pysubs2
 from yt_dlp import YoutubeDL
@@ -25,56 +27,98 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # ==============================
-# 0. DOWNLOAD ROBUSTE + VÉRIFICATION
+# 0. DOWNLOAD ENGINE PRO (YouTube / TikTok / Vimeo / liens signés)
 # ==============================
 
 def download_video(url: str) -> str:
     """
-    Télécharge une vidéo depuis n'importe quelle plateforme (TikTok, YouTube,
-    Vimeo, liens signés, .mp4 direct) et vérifie qu'elle est lisible par Whisper.
+    Télécharge une vidéo depuis n'importe quelle plateforme (YouTube, TikTok, Vimeo,
+    liens signés, etc.) avec :
+      - User-Agent de navigateur
+      - headers adaptés TikTok
+      - geo-bypass US
+      - retries
+      - vérification ffprobe
+
+    Retourne le chemin local vers un vrai .mp4 lisible par Whisper.
     """
-    print(f"⬇️ Téléchargement via yt-dlp : {url}")
+    print(f"⬇️ [DOWNLOAD] URL : {url}")
 
     output = UPLOADS_DIR / f"input_{os.urandom(4).hex()}.mp4"
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+
+    # User-Agent de vrai Chrome
+    ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    )
+
+    headers = {
+        "User-Agent": ua,
+        "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+    }
+
+    # TikTok : très sensible au Referer + UA
+    if "tiktok.com" in host or "douyin.com" in host:
+        headers["Referer"] = "https://www.tiktok.com/"
 
     ydl_opts = {
         "outtmpl": str(output),
-        "format": "mp4/best/bestvideo+bestaudio",
+        "format": "bv*+ba/best/b",          # meilleure vidéo + audio possible
         "merge_output_format": "mp4",
         "noplaylist": True,
-        "quiet": True
+        "quiet": True,
+        "geo_bypass": True,
+        "geo_bypass_country": "US",        # contourner pas mal de blocages YouTube
+        "nocheckcertificate": True,
+        "retries": 3,
+        "user_agent": ua,
+        "http_headers": headers,
     }
 
-    # ---- Téléchargement ----
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        raise Exception(f"yt-dlp a échoué : {e}")
+    last_err = None
+
+    # === Tentatives multiples yt-dlp ===
+    for attempt in range(1, 4):
+        try:
+            print(f"📥 Tentative yt-dlp {attempt}/3...")
+            with YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            print(f"⚠️ Échec tentative {attempt} : {e}")
+            time.sleep(2)
+
+    if last_err is not None and not output.exists():
+        raise Exception(f"yt-dlp a échoué après 3 tentatives : {last_err}")
 
     if not output.exists():
         raise Exception("Téléchargement échoué : fichier inexistant après yt-dlp.")
 
     size = output.stat().st_size
-    print(f"📦 Taille fichier : {size} bytes")
+    print(f"📦 Taille fichier téléchargé : {size} bytes")
 
-    if size < 50000:
-        raise Exception("Fichier trop petit (<50kb) → probablement pas une vidéo.")
+    # Si le fichier est trop petit, c'est souvent une page HTML ou une erreur
+    if size < 80_000:  # ~80 Ko
+        raise Exception("Fichier téléchargé trop petit (<80ko) → probablement pas une vraie vidéo.")
 
-    # ---- Vérification FFmpeg ----
+    # Vérification ffprobe (important avant Whisper)
     probe_cmd = [
         "ffprobe", "-v", "error",
         "-show_format", "-show_streams",
         str(output)
     ]
-
     probe = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     if probe.returncode != 0:
         err = probe.stderr.decode("utf-8", errors="ignore")
-        raise Exception(f"ffprobe : fichier illisible → {err}")
+        raise Exception(f"ffprobe : fichier illisible ou non supporté → {err}")
 
-    print("✅ Vidéo vérifiée, format OK.")
+    print("✅ Vidéo téléchargée & validée (OK pour Whisper).")
     return str(output)
 
 
@@ -203,7 +247,7 @@ def generate_ass_subs_for_clip(
 ):
     subs = pysubs2.SSAFile()
 
-    # Style KLAP
+    # Style KLAP-like
     style = pysubs2.SSAStyle()
     style.name = "Klap"
     style.fontname = "Poppins"
