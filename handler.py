@@ -1,8 +1,31 @@
 import traceback
 from typing import Any, Dict
+import os
+import subprocess
 
 import runpod
 from processor import generate_shorts, download_video
+
+
+def debug_download(url: str):
+    path = download_video(url)
+
+    size = os.path.getsize(path)
+
+    # ffprobe check
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-show_format", "-show_streams",
+        path
+    ]
+    probe = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    return {
+        "file_path": path,
+        "size_bytes": size,
+        "stdout": probe.stdout.decode(errors="ignore"),
+        "stderr": probe.stderr.decode(errors="ignore")
+    }
 
 
 def handler(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -10,46 +33,43 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
         inp = event.get("input", {})
         task = inp.get("task", "ping")
 
-        # 1) TEST
+        # 1) PING
         if task == "ping":
-            return {
-                "status": "ok",
-                "message": "clipai-runpod-engine is alive 🔥"
-            }
+            return {"status": "ok", "message": "alive"}
 
-        # 2) TRAITEMENT VIDÉO
+        # 2) DEBUG DOWNLOAD
+        if task == "debug_download":
+            url = inp.get("video_url")
+            if not url:
+                return {"status": "error", "error": "missing video_url"}
+
+            return debug_download(url)
+
+        # 3) PROCESS FULL PIPELINE
         if task == "process":
             url = inp.get("video_url")
             if not url:
-                return {"status": "error", "error": "Missing video_url"}
+                return {"status": "error", "error": "missing video_url"}
 
-            num_clips = int(inp.get("num_clips", 8))
-            min_d = float(inp.get("min_duration", 20))
-            max_d = float(inp.get("max_duration", 45))
-
-            # Téléchargement robuste
             local_path = download_video(url)
 
-            # Génération shorts
             clips = generate_shorts(
                 input_video_path=local_path,
-                num_clips=num_clips,
-                min_duration=min_d,
-                max_duration=max_d
+                num_clips=int(inp.get("num_clips", 8)),
+                min_duration=float(inp.get("min_duration", 20)),
+                max_duration=float(inp.get("max_duration", 45))
             )
 
             return {"status": "done", "clips": clips}
 
-        # 3) TASK INCONNU
-        return {"status": "error", "error": f"Unknown task '{task}'"}
+        return {"status": "error", "error": "unknown task"}
 
     except Exception as e:
         return {
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": traceback.format_exc()
         }
 
 
-# Start RunPod
 runpod.serverless.start({"handler": handler})

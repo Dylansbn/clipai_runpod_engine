@@ -1,3 +1,6 @@
+# FORCE REBUILD
+FROM python:3.10-slim
+
 FROM python:3.10-slim
 
 # ========== INSTALL SYSTEM DEPS ==========

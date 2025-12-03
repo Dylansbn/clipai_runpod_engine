@@ -10,7 +10,7 @@ from openai import OpenAI
 
 
 # ==============================
-#  CONFIG
+#  CONFIG & DOSSIERS
 # ==============================
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,33 +25,57 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # ==============================
-# 0. DOWNLOAD ROBUSTE (yt-dlp)
+# 0. DOWNLOAD ROBUSTE + VÉRIFICATION
 # ==============================
 
 def download_video(url: str) -> str:
-    """Télécharge TOUTES les vidéos (YouTube, TikTok, Vimeo, mp4 direct…)."""
-    print(f"⬇️ Téléchargement vidéo via yt-dlp : {url}")
+    """
+    Télécharge une vidéo depuis n'importe quelle plateforme (TikTok, YouTube,
+    Vimeo, liens signés, .mp4 direct) et vérifie qu'elle est lisible par Whisper.
+    """
+    print(f"⬇️ Téléchargement via yt-dlp : {url}")
 
-    output_file = UPLOADS_DIR / f"input_{os.urandom(4).hex()}.mp4"
+    output = UPLOADS_DIR / f"input_{os.urandom(4).hex()}.mp4"
+
     ydl_opts = {
-        "outtmpl": str(output_file),
+        "outtmpl": str(output),
         "format": "mp4/best/bestvideo+bestaudio",
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True
     }
 
+    # ---- Téléchargement ----
     try:
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as e:
-        raise Exception(f"Erreur téléchargement vidéo (yt-dlp) : {str(e)}")
+        raise Exception(f"yt-dlp a échoué : {e}")
 
-    if not output_file.exists():
-        raise Exception("Téléchargement échoué : fichier non trouvé après yt-dlp")
+    if not output.exists():
+        raise Exception("Téléchargement échoué : fichier inexistant après yt-dlp.")
 
-    print(f"✅ Vidéo téléchargée → {output_file}")
-    return str(output_file)
+    size = output.stat().st_size
+    print(f"📦 Taille fichier : {size} bytes")
+
+    if size < 50000:
+        raise Exception("Fichier trop petit (<50kb) → probablement pas une vidéo.")
+
+    # ---- Vérification FFmpeg ----
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-show_format", "-show_streams",
+        str(output)
+    ]
+
+    probe = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if probe.returncode != 0:
+        err = probe.stderr.decode("utf-8", errors="ignore")
+        raise Exception(f"ffprobe : fichier illisible → {err}")
+
+    print("✅ Vidéo vérifiée, format OK.")
+    return str(output)
 
 
 # ==============================
@@ -59,7 +83,7 @@ def download_video(url: str) -> str:
 # ==============================
 
 def transcribe_with_whisper(video_path: str) -> Dict[str, Any]:
-    print("🎙️ Envoi vidéo → Whisper API ...")
+    print("🎙️ Envoi vidéo → Whisper API...")
 
     with open(video_path, "rb") as f:
         res = client.audio.transcriptions.create(
@@ -69,13 +93,11 @@ def transcribe_with_whisper(video_path: str) -> Dict[str, Any]:
         )
 
     segments = [
-        {
-            "start": float(s.start),
-            "end": float(s.end),
-            "text": s.text.strip()
-        }
+        {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
         for s in res.segments
     ]
+
+    print(f"📌 Segments trouvés : {len(segments)}")
 
     return {
         "text": res.text.strip(),
@@ -84,7 +106,7 @@ def transcribe_with_whisper(video_path: str) -> Dict[str, Any]:
 
 
 # ==============================
-# 2. IA VIRALE GPT
+# 2. IA VIRAL GPT (sélection des clips)
 # ==============================
 
 def select_viral_segments(
@@ -92,18 +114,19 @@ def select_viral_segments(
     num_clips: int,
     min_duration: float,
     max_duration: float
-):
+) -> List[Dict[str, Any]]:
+
     if not segments:
         return []
 
     transcript = "\n".join(
-        f"[{s['start']:.2f}->{s['end']:.2f}] {s['text']}"
+        f"[{s['start']:.2f} → {s['end']:.2f}] {s['text']}"
         for s in segments
     )[:15000]
 
     system_prompt = (
-        "Tu es expert TikTok. Sélectionne les meilleurs moments viraux. "
-        "Réponds en strict JSON."
+        "Tu es expert TikTok. Tu choisis les clips les plus viraux. "
+        "Réponds STRICTEMENT en JSON valide."
     )
 
     user_prompt = f"""
@@ -111,23 +134,28 @@ Transcription :
 
 {transcript}
 
-Choisis {num_clips} clips de {min_duration} à {max_duration} secondes.
+Choisis {num_clips} clips de {min_duration}–{max_duration} secondes.
 
-Format JSON :
+Format JSON strict :
 {{
  "clips":[
-   {{"start":0,"end":20,"title":"Titre","reason":"..."}}
+   {{
+     "start": 10,
+     "end": 28,
+     "title": "Titre viral",
+     "reason": "Why viral"
+   }}
  ]
 }}
 """
 
     completion = client.chat.completions.create(
         model="gpt-4.1-mini",
-        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ]
+        ],
+        response_format={"type": "json_object"},
     )
 
     data = json.loads(completion.choices[0].message.content)
@@ -136,35 +164,46 @@ Format JSON :
     final = []
     for c in clips:
         try:
-            if float(c["end"]) > float(c["start"]):
+            s = float(c["start"])
+            e = float(c["end"])
+            if e > s:
                 final.append({
-                    "start": float(c["start"]),
-                    "end": float(c["end"]),
+                    "start": s,
+                    "end": e,
                     "title": c.get("title", "Clip"),
                     "reason": c.get("reason", "")
                 })
         except:
             pass
 
+    print(f"🔥 Clips sélectionnés : {len(final)}")
     return final
 
 
 # ==============================
-# 3. GÉNÉRATION SOUS-TITRES .ASS
+# 3. GÉNÉRATION SOUS-TITRES KARAOKÉ
 # ==============================
 
-def build_karaoke_text(text, start_sec, end_sec):
+def build_karaoke_text(text: str, start: float, end: float) -> str:
     words = text.split()
     if not words:
         return ""
-    duration_ms = max((end_sec - start_sec) * 1000, 1)
+
+    duration_ms = max((end - start) * 1000, 1)
     per = max(int(duration_ms / len(words)), 1)
+
     return " ".join([f"{{\\k{per}}}{w}" for w in words])
 
 
-def generate_ass_subs_for_clip(clip_start, clip_end, segments, subs_path):
+def generate_ass_subs_for_clip(
+    clip_start: float,
+    clip_end: float,
+    segments: List[Dict[str, Any]],
+    subs_path: Path,
+):
     subs = pysubs2.SSAFile()
 
+    # Style KLAP
     style = pysubs2.SSAStyle()
     style.name = "Klap"
     style.fontname = "Poppins"
@@ -173,7 +212,7 @@ def generate_ass_subs_for_clip(clip_start, clip_end, segments, subs_path):
     style.outline = 4
     style.primarycolor = pysubs2.Color(255, 255, 0)
     style.outlinecolor = pysubs2.Color(0, 0, 0)
-    style.alignment = 2
+    style.alignment = 2  # centré
     subs.styles[style.name] = style
 
     for seg in segments:
@@ -183,21 +222,32 @@ def generate_ass_subs_for_clip(clip_start, clip_end, segments, subs_path):
         start = max(seg["start"], clip_start) - clip_start
         end = min(seg["end"], clip_end) - clip_start
 
+        ktext = build_karaoke_text(seg["text"], seg["start"], seg["end"])
+        if not ktext:
+            continue
+
         ev = pysubs2.SSAEvent()
         ev.start = int(start * 1000)
         ev.end = int(end * 1000)
         ev.style = "Klap"
-        ev.text = build_karaoke_text(seg["text"], seg["start"], seg["end"])
+        ev.text = ktext
+
         subs.events.append(ev)
 
     subs.save(str(subs_path))
 
 
 # ==============================
-# 4. FFMPEG (CUT + CROP + SUBS)
+# 4. FFMPEG (9:16 + sous-titres)
 # ==============================
 
-def ffmpeg_extract_and_style(src, out, subs, start, end):
+def ffmpeg_extract_and_style(
+    src: str,
+    out: str,
+    subs: str,
+    start: float,
+    end: float
+):
     duration = max(end - start, 0.5)
 
     cmd = [
@@ -214,6 +264,7 @@ def ffmpeg_extract_and_style(src, out, subs, start, end):
         out
     ]
 
+    print("🎬 FFmpeg →", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
 
@@ -221,29 +272,50 @@ def ffmpeg_extract_and_style(src, out, subs, start, end):
 # 5. PIPELINE GLOBAL
 # ==============================
 
-def generate_shorts(input_video_path, num_clips=8, min_duration=20, max_duration=45):
+def generate_shorts(
+    input_video_path: str,
+    num_clips: int = 8,
+    min_duration: float = 20,
+    max_duration: float = 45
+):
+    print("🚀 Pipeline IA lancé...")
 
+    # 1. Transcription
     tr = transcribe_with_whisper(input_video_path)
     segments = tr["segments"]
 
-    viral = select_viral_segments(segments, num_clips, min_duration, max_duration)
+    # 2. Sélection IA
+    viral_clips = select_viral_segments(
+        segments, num_clips, min_duration, max_duration
+    )
 
     results = []
 
-    for i, c in enumerate(viral, start=1):
+    # 3. Génération des shorts
+    for i, c in enumerate(viral_clips, start=1):
         out_vid = SHORTS_DIR / f"short_{i:02d}.mp4"
         out_ass = SUBS_DIR / f"short_{i:02d}.ass"
 
-        generate_ass_subs_for_clip(c["start"], c["end"], segments, out_ass)
-        ffmpeg_extract_and_style(input_video_path, str(out_vid), str(out_ass), c["start"], c["end"])
+        print(f"▶️ Clip {i} : {c['start']} → {c['end']}")
+
+        generate_ass_subs_for_clip(
+            c["start"], c["end"], segments, out_ass
+        )
+
+        ffmpeg_extract_and_style(
+            input_video_path, str(out_vid), str(out_ass),
+            c["start"], c["end"]
+        )
 
         results.append({
             "index": i,
             "title": c["title"],
+            "reason": c["reason"],
             "start": c["start"],
             "end": c["end"],
             "video_path": str(out_vid),
-            "subs_path": str(out_ass)
+            "subs_path": str(out_ass),
         })
 
+    print(f"🎉 Shorts générés : {len(results)}")
     return results
