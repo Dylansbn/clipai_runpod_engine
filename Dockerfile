@@ -1,4 +1,8 @@
-# FORCE_REBUILD_13
+# FORCE_REBUILD_14
+# (HARD RESET)
+# (ANY CHANGE HERE FORCES CACHE BREAK)
+FROM python:3.10-slim
+
 FROM python:3.10-slim
 
 # ========== INSTALL SYSTEM DEPS ==========
