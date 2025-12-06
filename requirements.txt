@@ -6,3 +6,4 @@ requests
 runpod
 opencv-python-headless
 numpy
+boto3

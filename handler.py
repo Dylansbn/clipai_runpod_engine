@@ -9,134 +9,93 @@ from processor import (
     generate_shorts,
 )
 
-# ===============================
-#  UTILITAIRE DEBUG : ffprobe
-# ===============================
 
-def debug_probe(path: str) -> Dict[str, Any]:
-    """Petit helper pour inspecter une vidéo via ffprobe."""
-    import subprocess
-
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_streams",
-        "-show_format",
-        path,
-    ]
-
-    try:
-        out = subprocess.check_output(cmd).decode("utf-8")
-        return {
-            "file_path": path,
-            "size_bytes": os.path.getsize(path),
-            "ffprobe_json": out,
-        }
-    except Exception as e:
-        return {
-            "error": "ffprobe failed",
-            "traceback": str(e),
-        }
-
-
-# ===============================
-#  HANDLER PRINCIPAL RUNPOD
-# ===============================
+# ============================================
+#  HANDLER PRINCIPAL — VERSION PRO
+# ============================================
 
 def handler(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    event = {
-      "input": {
-         "url": "...",        # ou "video_url"
-         "task": "...",       # optionnel : process | ping | debug_*
-         "num_clips": 3,
-         "min_duration": 6,
-         "max_duration": 25
-      }
-    }
+    Compatible frontend + CURL :
 
-    Avec /runsync, RunPod renverra :
-    {
-      "status": "COMPLETED",
-      "output": { ...ce que cette fonction retourne... }
+    event = {
+        "input": {
+            "url": "...",
+            "video_url": "...",
+            "task": "process" | "ping" | "debug_download",
+            "num_clips": 3,
+            "min_duration": 6,
+            "max_duration": 25
+        }
     }
     """
 
     print("📩 EVENT REÇU :", event)
 
     try:
-        inp = event.get("input") or {}
+        inp = event.get("input", {})
+        if not isinstance(inp, dict):
+            return {"status": "error", "error": "Invalid input payload"}
 
-        # On accepte à la fois "video_url" et "url"
+        # -------------------------
+        # Extraction des champs
+        # -------------------------
         url = inp.get("video_url") or inp.get("url")
 
-        # Déduction de la task si absente :
-        #  - URL présente => process
-        #  - pas d’URL    => ping
         task = inp.get("task")
         if not task:
+            # si une URL est présente → tâche = process
             task = "process" if url else "ping"
 
-        num_clips = int(inp.get("num_clips", 8))
-        min_duration = float(inp.get("min_duration", 20))
-        max_duration = float(inp.get("max_duration", 45))
+        num_clips = int(inp.get("num_clips", 3))
+        min_duration = float(inp.get("min_duration", 6))
+        max_duration = float(inp.get("max_duration", 25))
 
-        # 1️⃣ PING
+        print(f"🔧 Task: {task}")
+        print(f"🎞 URL: {url}")
+        print(f"🎬 Clips: {num_clips} ({min_duration}s → {max_duration}s)")
+
+        # ============================================
+        # 1️⃣ TASK : PING — Vérifier si le moteur tourne
+        # ============================================
         if task == "ping":
-            resp = {
+            return {
                 "status": "ok",
-                "message": "ClipAI Engine is alive 🔥",
-                "version": "serverless-pro",
+                "message": "ClipAI Engine Alive 🔥",
+                "version": "serverless-pro"
             }
-            print("🔵 RÉPONSE HANDLER :", resp)
-            return resp
 
-        # 2️⃣ DEBUG DOWNLOAD
+        # ============================================
+        # 2️⃣ TASK : Téléchargement simple
+        # ============================================
         if task == "debug_download":
             if not url:
-                resp = {"status": "error", "error": "Missing 'url' / 'video_url'"}
-                print("🔵 RÉPONSE HANDLER :", resp)
-                return resp
+                return {"status": "error", "error": "Missing URL"}
 
+            print("⬇️ Téléchargement simple…")
             local_path = download_video(url)
-            resp = {
+
+            size = os.path.getsize(local_path)
+
+            print(f"📦 Fichier téléchargé : {size/1_000_000:.2f} MB")
+
+            return {
                 "status": "downloaded",
-                "path": local_path,
-                "size_bytes": os.path.getsize(local_path),
+                "local_path": local_path,
+                "size_bytes": size
             }
-            print("🔵 RÉPONSE HANDLER :", resp)
-            return resp
 
-        # 3️⃣ DEBUG PROBE
-        if task == "debug_probe":
-            if not url:
-                resp = {"status": "error", "error": "Missing 'url' / 'video_url'"}
-                print("🔵 RÉPONSE HANDLER :", resp)
-                return resp
-
-            local_path = download_video(url)
-            ff = debug_probe(local_path)
-
-            resp = {
-                "status": "probe_ok",
-                "file": local_path,
-                "probe": ff,
-            }
-            print("🔵 RÉPONSE HANDLER :", resp)
-            return resp
-
-        # 4️⃣ PIPELINE COMPLET = SHORTS
+        # ============================================
+        # 3️⃣ TASK : Pipeline complet (shorts)
+        # ============================================
         if task == "process":
             if not url:
-                resp = {"status": "error", "error": "Missing 'url' / 'video_url'"}
-                print("🔵 RÉPONSE HANDLER :", resp)
-                return resp
+                return {"status": "error", "error": "Missing URL"}
 
             print("⬇️ Téléchargement…", url)
             local_path = download_video(url)
 
-            print("🎥 Génération Shorts…")
+            print("🎥 Génération des shorts…")
             clips = generate_shorts(
                 input_video_path=local_path,
                 num_clips=num_clips,
@@ -144,34 +103,34 @@ def handler(event: Dict[str, Any]) -> Dict[str, Any]:
                 max_duration=max_duration,
             )
 
-            resp = {
-                "status": "done",
-                "clips": clips,
-            }
-            print("🔵 RÉPONSE HANDLER :", resp)
-            return resp
+            print(f"✅ {len(clips)} clips générés")
 
-        # 5️⃣ TASK INCONNUE
-        resp = {
+            return {
+                "status": "done",
+                "clips": clips
+            }
+
+        # ============================================
+        # 4️⃣ Task inconnue
+        # ============================================
+        return {
             "status": "error",
-            "error": f"Unknown task '{task}'",
+            "error": f"Unknown task: {task}"
         }
-        print("🔵 RÉPONSE HANDLER :", resp)
-        return resp
 
     except Exception as e:
-        print("🔥 ERREUR handler:", e)
+        print("🔥 ERREUR handler :", e)
         print(traceback.format_exc())
 
+        # Toujours retourner un format 100% exploitable par ton frontend
         return {
             "status": "error",
             "error": str(e),
-            "traceback": traceback.format_exc(),
+            "traceback": traceback.format_exc()
         }
 
 
-# ===============================
-#  DÉMARRAGE RUNPOD
-# ===============================
-
+# ============================================
+#  RUNPOD — Entrée du worker
+# ============================================
 runpod.serverless.start({"handler": handler})
