@@ -1,24 +1,26 @@
-FROM python:3.10-slim
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
-# ========== INSTALL SYSTEM DEPS ==========
+# --- dépendances système ---
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    wget \
-    curl \
+    python3 \
+    python3-pip \
+    python3-dev \
     git \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# ========== INSTALL PYTHON DEPENDENCIES ==========
 WORKDIR /app
 
+# --- requirements ---
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --upgrade pip
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# yt-dlp + pysubs2 au cas où ils ne sont pas dans requirements.txt
-RUN pip install --no-cache-dir yt-dlp pysubs2
-
-# ========== COPY PROJECT ==========
+# --- code ---
 COPY . .
 
-# ========== LAUNCH ==========
-CMD ["python", "handler.py"]
+# --- variables par défaut (seront écrasées par RunPod) ---
+ENV PYTHONUNBUFFERED=1
+
+# --- entrypoint RunPod Serverless ---
+CMD ["python3", "handler.py"]
