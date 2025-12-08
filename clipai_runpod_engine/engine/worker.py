@@ -1,11 +1,12 @@
+# clipai_runpod_engine/engine/worker.py
 # ============================================================
-# WORKER GPU — VERSION KLAP PRO COMPLÈTEMENT CORRIGÉE
+# WORKER GPU — VERSION KLAP PRO
 # ============================================================
 
 import time
 import traceback
 
-# IMPORT RELATIF (obligatoire avec un package Python)
+# IMPORT RELATIF (obligatoire dans un package)
 from ..job_queue.file_queue import pop_job
 
 # Imports internes du moteur
@@ -31,7 +32,7 @@ def worker_loop():
 
         job_id = job["job_id"]
         video_url = job["video_url"]
-        num_clips = job["num_clips"]
+        num_clips = job.get("num_clips", 3)
 
         print("\n==============================================")
         print(f"🎬 NOUVEAU JOB : {job_id}")
@@ -64,7 +65,7 @@ def worker_loop():
             clips = select_clips(segments, analysis, num_clips)
 
             # ------------------------------------------------------------
-            # 6️⃣ Rendu vidéo + sous-titres KLAP PRO
+            # 6️⃣ Rendu vidéo + sous-titres
             # ------------------------------------------------------------
             print("🎬 Rendu des clips (NVENC + sous-titres)...")
             outputs = render_clips(local_path, clips, segments)
@@ -78,7 +79,7 @@ def worker_loop():
             print(f"✅ JOB TERMINÉ → {job_id}")
             print(f"🌐 URLs générées : {urls}\n")
 
-        except Exception as e:
+        except Exception:
             print(f"🔥 ERREUR dans le job {job_id} !")
             print(traceback.format_exc())
 
@@ -86,6 +87,5 @@ def worker_loop():
         time.sleep(0.5)
 
 
-# Mode exécution directe
 if __name__ == "__main__":
     worker_loop()

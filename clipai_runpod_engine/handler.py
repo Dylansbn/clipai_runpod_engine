@@ -1,48 +1,80 @@
-import runpod
+# clipai_runpod_engine/handler.py
+
 import uuid
-from job_queue.file_queue import push_job
+from typing import Optional
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from .job_queue.file_queue import push_job
 
 
-def handler(event):
+# =========================
+#  APP FASTAPI PRINCIPALE
+# =========================
+
+app = FastAPI(title="ClipAI RunPod Engine")
+
+# CORS — tu ajusteras plus tard avec le domaine de ton front
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # ex: ["https://tonsite.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# =========================
+#  MODELES D'ENTRÉE
+# =========================
+
+class ProcessRequest(BaseModel):
+    video_url: str
+    num_clips: int = 3
+
+
+# =========================
+#  ROUTES
+# =========================
+
+@app.get("/ping")
+async def ping():
     """
-    Handler RunPod Serverless
-    → Reçoit une requête
-    → Crée un job
-    → L’ajoute dans la queue
-    → Le worker GPU le traitera
+    Simple endpoint de santé pour tester le pod.
     """
-    
-    print("📩 EVENT REÇU :", event)
+    return {"status": "ok"}
 
-    inp = event.get("input", {})
 
-    video_url = inp.get("video_url")
-    num_clips = int(inp.get("num_clips", 3))
+@app.post("/process")
+async def process_video(req: ProcessRequest):
+    """
+    Reçoit une vidéo + nb de clips,
+    crée un job dans la file,
+    et renvoie immédiatement un job_id.
+    """
+    print("📩 Requête /process reçue :", req)
 
-    if not video_url:
+    if not req.video_url:
         return {
             "status": "error",
-            "message": "Missing video_url"
+            "message": "Missing video_url",
         }
 
-    # Créer l'ID unique du job
+    # ID unique du job
     job_id = str(uuid.uuid4())
 
-    # Ajouter le job dans ta file JSON
+    # Push dans la file de jobs
     push_job({
         "job_id": job_id,
-        "video_url": video_url,
-        "num_clips": num_clips
+        "video_url": req.video_url,
+        "num_clips": int(req.num_clips),
     })
 
     print(f"📌 Job créé : {job_id}")
 
-    # Répond immédiatement (serverless)
     return {
         "status": "queued",
-        "job_id": job_id
+        "job_id": job_id,
     }
-
-
-# Lancer le serveur RunPod
-runpod.serverless.start({"handler": handler})
