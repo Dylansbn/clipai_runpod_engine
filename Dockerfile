@@ -1,5 +1,8 @@
 FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 
+# Fix tzdata interactive prompt
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
