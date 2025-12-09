@@ -1,4 +1,5 @@
 # clipai_runpod_engine/handler.py
+print("🔥 Handler imported successfully")
 
 import uuid
 from typing import Optional
