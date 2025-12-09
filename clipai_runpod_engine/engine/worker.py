@@ -1,15 +1,11 @@
 # clipai_runpod_engine/engine/worker.py
 # ============================================================
-# WORKER GPU — VERSION KLAP PRO
+# WORKER GPU — VERSION KLAP PRO (SERVERLESS)
 # ============================================================
 
-import time
 import traceback
+from typing import Dict, Any
 
-# IMPORT RELATIF (obligatoire dans un package)
-from ..job_queue.file_queue import pop_job
-
-# Imports internes du moteur
 from .video_analyzer import analyze_video, download_video
 from .whisper_gpu import transcribe_gpu
 from .clip_selector import select_clips
@@ -17,75 +13,66 @@ from .render import render_clips
 from .storage import upload_results
 
 
-def worker_loop():
-    print("🚀 Worker GPU démarré — moteur KLAP PRO opérationnel\n")
+def process_job(job_id: str, video_url: str, num_clips: int = 3) -> Dict[str, Any]:
+    """
+    Pipeline complet pour un job unique.
+    Appelé par le handler RunPod Serverless.
+    """
 
-    while True:
-        # ------------------------------------------------------------
-        # 1️⃣ Récupérer un job dans la file
-        # ------------------------------------------------------------
-        job = pop_job()
+    print("\n==============================================")
+    print(f"🚀 DÉMARRAGE JOB : {job_id}")
+    print("==============================================")
+    print(f"📹 URL vidéo : {video_url}")
+    print(f"🎯 Clips demandés : {num_clips}")
 
-        if not job:
-            time.sleep(1)
-            continue
+    try:
+        # 1️⃣ Téléchargement vidéo
+        print("⬇️ Téléchargement de la vidéo...")
+        local_path = download_video(video_url)
 
-        job_id = job["job_id"]
-        video_url = job["video_url"]
-        num_clips = job.get("num_clips", 3)
+        # 2️⃣ Analyse vidéo
+        print("📊 Analyse vidéo (peaks / énergie)...")
+        analysis = analyze_video(local_path)
 
-        print("\n==============================================")
-        print(f"🎬 NOUVEAU JOB : {job_id}")
-        print("==============================================")
-        print(f"📹 URL vidéo : {video_url}")
+        # 3️⃣ Transcription Whisper GPU
+        print("🎧 Transcription (Whisper GPU)...")
+        segments = transcribe_gpu(local_path)
 
-        try:
-            # ------------------------------------------------------------
-            # 2️⃣ Téléchargement vidéo
-            # ------------------------------------------------------------
-            print("⬇️ Téléchargement de la vidéo...")
-            local_path = download_video(video_url)
+        # 4️⃣ Sélection des meilleurs moments
+        print("🧠 Sélection des meilleurs moments...")
+        clips = select_clips(segments, analysis, num_clips)
 
-            # ------------------------------------------------------------
-            # 3️⃣ Analyse vidéo : peaks & énergie visuelle
-            # ------------------------------------------------------------
-            print("📊 Analyse vidéo...")
-            analysis = analyze_video(local_path)
+        # 5️⃣ Rendu des clips + sous-titres
+        print("🎬 Rendu des clips (NVENC + sous-titres KLAP)...")
+        outputs = render_clips(local_path, clips, segments)
 
-            # ------------------------------------------------------------
-            # 4️⃣ Transcription Whisper GPU
-            # ------------------------------------------------------------
-            print("🎧 Transcription (Whisper GPU)...")
-            segments = transcribe_gpu(local_path)
+        # 6️⃣ Upload final vers R2
+        print("☁️ Upload vers Cloudflare R2...")
+        urls = upload_results(job_id, outputs)
 
-            # ------------------------------------------------------------
-            # 5️⃣ Sélection IA (texte + analyse visuelle)
-            # ------------------------------------------------------------
-            print("🧠 Sélection des meilleurs moments...")
-            clips = select_clips(segments, analysis, num_clips)
+        print(f"✅ JOB TERMINÉ → {job_id}")
+        print(f"🌐 URLs générées : {urls}\n")
 
-            # ------------------------------------------------------------
-            # 6️⃣ Rendu vidéo + sous-titres
-            # ------------------------------------------------------------
-            print("🎬 Rendu des clips (NVENC + sous-titres)...")
-            outputs = render_clips(local_path, clips, segments)
+        # Réponse structurée pour le frontend
+        return {
+            "video_url": video_url,
+            "num_clips": num_clips,
+            "clips": [
+                {
+                    "index": i,
+                    "start": clip.get("start"),
+                    "end": clip.get("end"),
+                    "url": url,
+                }
+                for i, (clip, url) in enumerate(zip(clips, urls))
+            ],
+            "urls": urls,
+        }
 
-            # ------------------------------------------------------------
-            # 7️⃣ Upload final vers Cloudflare R2
-            # ------------------------------------------------------------
-            print("☁️ Upload R2 des clips rendus...")
-            urls = upload_results(job_id, outputs)
-
-            print(f"✅ JOB TERMINÉ → {job_id}")
-            print(f"🌐 URLs générées : {urls}\n")
-
-        except Exception:
-            print(f"🔥 ERREUR dans le job {job_id} !")
-            print(traceback.format_exc())
-
-        # Petite pause entre deux jobs
-        time.sleep(0.5)
-
-
-if __name__ == "__main__":
-    worker_loop()
+    except Exception as e:
+        print(f"🔥 ERREUR dans le job {job_id} !")
+        print(traceback.format_exc())
+        return {
+            "status": "error",
+            "error": str(e),
+        }
