@@ -53,20 +53,20 @@ def process_job(job_id: str, video_url: str, num_clips: int = 3) -> Dict[str, An
         print(f"✅ JOB TERMINÉ → {job_id}")
         print(f"🌐 URLs générées : {urls}\n")
 
-        # Réponse structurée pour le frontend
+        # ============================
+        # 🔥 RÉPONSE COMPATIBLE FRONTEND
+        # ============================
         return {
-            "video_url": video_url,
-            "num_clips": num_clips,
+            "status": "done",
             "clips": [
                 {
                     "index": i,
                     "start": clip.get("start"),
                     "end": clip.get("end"),
-                    "url": url,
+                    "url": urls[i],
                 }
-                for i, (clip, url) in enumerate(zip(clips, urls))
-            ],
-            "urls": urls,
+                for i, clip in enumerate(clips)
+            ]
         }
 
     except Exception as e:
@@ -76,3 +76,21 @@ def process_job(job_id: str, video_url: str, num_clips: int = 3) -> Dict[str, An
             "status": "error",
             "error": str(e),
         }
+
+
+# ============================================================
+# SI TU UTILISES UN WORKER RUNPOD MODULE (serverless)
+# ============================================================
+
+def run(event):
+    """
+    Adapter pour RunPod serverless dans server.py
+    """
+    inp = event.get("input", {})
+
+    job_id = inp.get("job_id", "no-id")
+    video_url = inp.get("video_url")
+    num_clips = int(inp.get("num_clips", 3))
+
+    return process_job(job_id, video_url, num_clips)
+
