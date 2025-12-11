@@ -1,5 +1,5 @@
-# 🔥 Base officielle RunPod Serverless (CUDA + cuDNN compatibles)
-FROM runpod/python:3.10-ubuntu-22.04
+# 🔥 Image officielle RunPod Serverless (GPU-compatible)
+FROM runpod/serverless:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -24,12 +24,12 @@ RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ---------------------
-# Code de ton moteur
+# Code du moteur IA
 # ---------------------
 COPY clipai_runpod_engine /app/clipai_runpod_engine
 COPY . .
 
 # ---------------------
-# Commande RunPod Serverless
+# Start Serverless Handler
 # ---------------------
 CMD ["python3", "-u", "-m", "clipai_runpod_engine.handler"]
