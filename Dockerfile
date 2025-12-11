@@ -29,3 +29,5 @@ RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
 
 # Commande de démarrage RunPod
 CMD ["python3", "-u", "-m", "clipai_runpod_engine.handler"]
+
+
