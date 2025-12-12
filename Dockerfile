@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -17,17 +17,22 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 
 # Dépendances Python
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copie TOUT le dossier de ton projet (et une seule fois)
-COPY . /app
+# Install PyTorch compatible CUDA 12.4
+RUN pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
 
-# Préchargement du modèle Whisper
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
+# Code
+COPY clipai_runpod_engine /app/clipai_runpod_engine
+COPY . .
 
-# Commande de démarrage RunPod
+# Pré-chargement Whisper
+RUN python3 - <<EOF
+from faster_whisper import WhisperModel
+WhisperModel("medium")
+EOF
+
+# Démarrage RunPod serverless
 CMD ["python3", "-u", "-m", "clipai_runpod_engine.handler"]
-
-
